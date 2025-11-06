@@ -1,7 +1,7 @@
 Flask
 requests
 beautifulsoup4
-google-search-results
+serpapi
 sumy
 nltk
 gunicorn
