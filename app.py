@@ -4,7 +4,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request
-from serpapi import GoogleSearch
+from google_search_results import GoogleSearchResults
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.summarizers.lsa import LsaSummarizer
@@ -99,8 +99,9 @@ def home():
         error_message = None
 
         try:
-            search = GoogleSearch(params)
+            search = GoogleSearchResults(params)
             results = search.get_dict()
+
             organic_results = results.get("organic_results", [])
             urls = [result["link"] for result in organic_results]
 
