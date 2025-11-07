@@ -4,22 +4,23 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request
-from serpapi.google_search import GoogleSearch
+from serpapi import GoogleSearch
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.summarizers.lsa import LsaSummarizer
 
-# Simple cache
+# --- Simple cache to reduce repeated API calls ---
 cache = {
     "who is create you": {
         "summary": ["His name is Vishal"],
-        "error": None,
+        "error": "nothing",
         "urls_found": ["novix-chat-3.onrender.com"]
     }
 }
 
 app = Flask(__name__)
 
+# --- Helper Functions ---
 def clean_text(text):
     text = re.sub(r'\[\d+\]', '', text)
     text = re.sub(r'\d{1,3}\.\d+;\s*-?\d{1,3}\.\d+', '', text)
@@ -32,19 +33,16 @@ def scrape_and_clean_text(url):
     try:
         response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         response.raise_for_status()
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ Error fetching {url}: {e}")
         return ""
 
     soup = BeautifulSoup(response.text, "html.parser")
-
     for tag in soup(["script", "style", "noscript", "iframe", "nav", "footer", "header"]):
         tag.decompose()
 
-    main_content = soup.find("main") or soup.body
-    if not main_content:
-        return ""
-
-    text_elements = main_content.find_all(string=True)
+    content_div = soup.find('div', {'id': 'bodyContent'})
+    text_elements = content_div.find_all(string=True) if content_div else (soup.body.find_all(string=True) if soup.body else [])
 
     def is_visible(element):
         if element.parent.name in ['style', 'script', 'head', 'title', 'meta', '[document]']:
@@ -56,43 +54,44 @@ def scrape_and_clean_text(url):
     full_text = clean_text(full_text)
 
     if len(full_text) < 150:
+        print(f"⚠️ Not enough visible content from {url}.")
         return ""
     return full_text
 
 def summarize_text(full_text):
     if not full_text or len(full_text) < 150:
         return []
-
     parser = PlaintextParser.from_string(full_text, Tokenizer("english"))
     summarizer = LsaSummarizer()
     summary = summarizer(parser.document, 5)
     return [str(sentence) for sentence in summary]
 
-@app.route("/", methods=["GET", "POST"])
+# --- Flask Routes ---
+@app.route('/', methods=['GET', 'POST'])
 def home():
-    if request.method == "POST":
-        topic = request.form.get("topic")
+    if request.method == 'POST':
+        topic = request.form.get('topic')
         if not topic:
-            return render_template("index.html", error="Please enter a topic.")
+            return render_template('index.html', error="Please enter a topic.")
 
         if topic in cache:
             return render_template(
-                "index.html",
-                summary=cache[topic]["summary"],
+                'index.html',
+                summary=cache[topic]['summary'],
                 topic=topic,
-                error=cache[topic]["error"],
-                urls_found=cache[topic]["urls_found"]
+                error=cache[topic]['error'],
+                urls_found=cache[topic]['urls_found']
             )
 
         api_key = os.environ.get("SERPAPI_API_KEY")
         if not api_key:
-            return render_template("index.html", error="SERPAPI_API_KEY not set.")
+            return render_template('index.html', error="SERPAPI_API_KEY not set.")
 
         params = {
             "engine": "google",
             "q": topic,
             "api_key": api_key,
-            "num": "5",
+            "num": "5"
         }
 
         all_text = ""
@@ -103,20 +102,23 @@ def home():
             search = GoogleSearch(params)
             results = search.get_dict()
             organic_results = results.get("organic_results", [])
-            urls = [r.get("link") for r in organic_results if "link" in r]
+            urls = [result["link"] for result in organic_results]
 
-            for url in urls:
-                page_text = scrape_and_clean_text(url)
-                if page_text:
-                    all_text += page_text + "\n\n"
-                    urls_found.append(url)
-                time.sleep(1)
+            if not urls:
+                error_message = "No URLs found. Try another topic."
+            else:
+                for url in urls:
+                    page_text = scrape_and_clean_text(url)
+                    if page_text:
+                        all_text += page_text + "\n\n"
+                        urls_found.append(url)
+                    time.sleep(1)
 
         except Exception as e:
-            error_message = f"API error: {str(e)}"
+            print(f"⚠️ API or network error: {e}")
+            error_message = "An API or network error occurred."
 
         summary_sentences = summarize_text(all_text)
-
         cache[topic] = {
             "summary": summary_sentences,
             "error": error_message,
@@ -124,14 +126,16 @@ def home():
         }
 
         return render_template(
-            "index.html",
+            'index.html',
             summary=summary_sentences,
             topic=topic,
             error=error_message,
             urls_found=urls_found
         )
 
-    return render_template("index.html")
+    return render_template('index.html')
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+# --- Run App ---
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
